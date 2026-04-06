@@ -8,8 +8,8 @@ use Illuminate\Database\Eloquent\Model;
 class Entity extends Model
 {
     use HasFactory;
-protected $primaryKey = 'EntityID'; // أخبري لاراڤيل باسم المفتاح الأساسي عندك
-    protected $fillable = ['EntityName', 'EntityType', 'LicenseNumber', 'Address', 'ContactPerson', 'ContactEmail', 'Status'];
+protected $fillable = ['EntityName', 'EntityType', 'LicenseNumber', 'Address', 'ContactPerson', 'ContactEmail', 'Status'];
+protected $primaryKey = 'EntityID'; 
 
     public function users()
     {

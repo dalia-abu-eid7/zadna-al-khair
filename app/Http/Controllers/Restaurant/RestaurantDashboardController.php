@@ -4,91 +4,154 @@ namespace App\Http\Controllers\Restaurant;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use App\Models\Donation;
+use App\Models\Entity;
+use App\Models\User;
+
+use App\Models\UserEntityMapping;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class RestaurantDashboardController extends Controller
 {
-
-    // عرض لوحة التحكم الرئيسية
     public function index()
     {
-        $restaurantId = Auth::user()->EntityID;
+        $userId = Auth::id();
+        $mapping = UserEntityMapping::where('UserID', $userId)->first();
 
+        if (!$mapping) {
+            return view('restaurant.dashboard', [
+                'stats' => ['total_donations' => 0, 'active_now' => 0, 'total_meals' => 0, 'partners' => 0],
+                'activeDonations' => collect(),
+                'suggestedPartners' => collect()
+            ]);
+        }
+
+        $restaurantId = $mapping->EntityID;
         $stats = [
-            'total_donations' => DB::table('donations')->where('DonatingEntityID', $restaurantId)->count(),
-            'active_now'      => DB::table('donations')->where('DonatingEntityID', $restaurantId)->whereIn('StatusID', [1, 2])->count(),
-            'total_meals'     => DB::table('donations')->where('DonatingEntityID', $restaurantId)->sum('Quantity') ?? 0,
-            'partners'        => DB::table('donations')->where('DonatingEntityID', $restaurantId)->whereNotNull('ReceivingEntityID')->distinct('ReceivingEntityID')->count('ReceivingEntityID'),
+            'total_donations' => Donation::where('DonatingEntityID', $restaurantId)->count(),
+            'active_now'      => Donation::where('DonatingEntityID', $restaurantId)->whereIn('StatusID', [1, 2])->count(),
+            'total_meals'     => Donation::where('DonatingEntityID', $restaurantId)->sum('Quantity') ?? 0,
+            'partners'        => Donation::where('DonatingEntityID', $restaurantId)->whereNotNull('ReceivingEntityID')->distinct('ReceivingEntityID')->count('ReceivingEntityID'),
         ];
 
-        $activeDonations = DB::table('donations')
-            ->leftJoin('donation_statuses', 'donations.StatusID', '=', 'donation_statuses.StatusID')
-            ->where('donations.DonatingEntityID', $restaurantId)
-            ->select('donations.*', 'donation_statuses.StatusName')
-            ->latest('donations.created_at')
-            ->limit(3)
-            ->get();
+        $activeDonations = Donation::with('status')->where('DonatingEntityID', $restaurantId)->whereIn('StatusID', [1, 2])->latest()->limit(3)->get();
+        $suggestedPartners = Entity::where('EntityType', 'Charity')->limit(4)->get();
 
-        return view('restaurant.dashboard', compact('stats', 'activeDonations'));
+        return view('restaurant.dashboard', compact('stats', 'activeDonations', 'suggestedPartners'));
     }
 
-    // عرض صفحة سجل التبرعات مع البحث والفلترة
+  public function showPartners()
+{
+    $userId = Auth::id();
+    $mapping = UserEntityMapping::where('UserID', $userId)->first();
+
+    if (!$mapping) {
+        return redirect()->back()->with('error', 'بيانات المطعم غير مكتملة.');
+    }
+
+    $restaurantId = $mapping->EntityID;
+
+    $partnerIds = Donation::where('DonatingEntityID', $restaurantId)
+        ->whereNotNull('ReceivingEntityID')
+        ->distinct()
+        ->pluck('ReceivingEntityID');
+
+    $partners = Entity::whereIn('EntityID', $partnerIds)
+        ->get()
+        ->map(function($entity) {
+            $user = User::whereHas('entities', function($q) use ($entity) {
+                $q->where('entities.EntityID', $entity->EntityID);
+            })->first();
+
+            $entity->manager_phone = $user->PhoneNumber ?? 'لا يوجد رقم';
+            $entity->manager_email = $user->email ?? $entity->ContactEmail;
+
+            return $entity;
+        });
+
+    return view('restaurant.partners', compact('partners'));
+}
+
     public function donationsList(Request $request)
     {
-        $restaurantId = Auth::user()->EntityID;
+        $userId = Auth::id();
+        $mapping = UserEntityMapping::where('UserID', $userId)->first();
+        $query = Donation::with(['status', 'receivingEntity'])->where('DonatingEntityID', $mapping->EntityID);
 
-        $query = DB::table('donations')
-            ->leftJoin('donation_statuses', 'donations.StatusID', '=', 'donation_statuses.StatusID')
-            ->leftJoin('entities as receiver', 'donations.ReceivingEntityID', '=', 'receiver.EntityID')
-            ->where('donations.DonatingEntityID', $restaurantId)
-            ->select(
-                'donations.*',
-                'donation_statuses.StatusName',
-                'receiver.EntityName as ReceiverName'
-            );
-
-        // 1. فلترة البحث النصي (وصف التبرع)
+        if ($request->filled('status')) { $query->where('StatusID', $request->status); }
         if ($request->filled('search')) {
-            $query->where('donations.Description', 'like', '%' . $request->search . '%');
+            $searchTerm = $request->search;
+            $query->where(function($q) use ($searchTerm) {
+                $q->where('Description', 'LIKE', "%{$searchTerm}%")->orWhere('Quantity', 'LIKE', "%{$searchTerm}%");
+            });
         }
 
-        // 2. فلترة الأزرار (الحالات 1, 2, 3, 4)
-        if ($request->filled('status')) {
-            $query->where('donations.StatusID', $request->status);
-        }
-
-        $donations = $query->latest('donations.created_at')->paginate(10);
-
+        $donations = $query->latest()->paginate(10);
         return view('restaurant.donations_list', compact('donations'));
     }
 
-    // فتح صفحة إضافة تبرع
-    public function createDonation()
-    {
-        return view('restaurant.add_donation');
+    public function createDonation() { return view('restaurant.add_donation'); }
+public function storeDonation(Request $request)
+{
+    // 1. التحقق من البيانات
+    $request->validate([
+        'Description' => 'required|string|max:255',
+        'Quantity'    => 'required|numeric|min:1',
+        'Unit'        => 'required',
+        'PickupTimeSuggestion' => 'required',
+    ]);
+
+    $userId = Auth::id();
+    $mapping = UserEntityMapping::where('UserID', $userId)->first();
+
+    if (!$mapping) {
+        return redirect()->back()->with('error', 'عذراً، لم يتم العثور على بيانات المطعم المرتبطة بحسابك.');
     }
 
+    // 2. نحفظ التبرع في متغير اسمه $donation لكي نتمكن من استخدام الـ ID الخاص به
+    $donation = Donation::create([
+        'DonatingEntityID'     => $mapping->EntityID,
+        'Description'          => $request->Description,
+        'Quantity'             => $request->Quantity,
+        'Unit'                 => $request->Unit,
+        'PickupTimeSuggestion' => $request->PickupTimeSuggestion,
+        'ExpiryInfo'           => $request->ExpiryInfo,
+        'StatusID'             => 1, // حالة "جديد"
+    ]);
 
-    // حفظ التبرع الجديد
-    public function storeDonation(Request $request)
+    // 3. (الإضافة الجديدة) هنا نكتب السطر الذي سيجعل التبرع يظهر في لوحة الأدمن
+    DB::table('donation_history')->insert([
+        'DonationID'        => $donation->DonationID, // الرقم التلقائي للتبرع اللي انحفظ فوق
+        'StatusID'          => 1,
+        'ChangedByUserID'   => $userId,
+        'ChangeTimestamp'   => now(),
+        'Notes'             => 'قام المطعم بإضافة تبرع جديد للوجبات.',
+        'created_at'        => now(),
+        'updated_at'        => now(),
+    ]);
+
+    return redirect()->route('restaurant.donations_list')->with('success', 'تمت إضافة التبرع بنجاح، شكرًا لمساهمتكم! ✨');
+}
+
+
+    public function editDonation($id)
     {
-        $request->validate([
-            'description' => 'required|string|max:255',
-            'quantity' => 'required|numeric',
-            'unit' => 'required',
-        ]);
+        $donation = Donation::findOrFail($id);
+        return view('restaurant.edit_donation', compact('donation'));
+    }
 
-        DB::table('donations')->insert([
-            'DonatingEntityID' => Auth::user()->EntityID,
-            'Description' => $request->description,
-            'Quantity' => $request->quantity,
-            'Unit' => $request->unit,
-            'StatusID' => 1, // متاح تلقائياً
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+    public function updateDonation(Request $request, $id)
+    {
+        $donation = Donation::findOrFail($id);
+        $donation->update($request->all());
+        return redirect()->route('restaurant.donations_list')->with('success', 'تم التحديث بنجاح');
+    }
 
-        return redirect()->route('restaurant.donations_list')->with('success', 'تمت إضافة التبرع بنجاح');
+    public function destroyDonation($id)
+    {
+        $donation = Donation::findOrFail($id);
+        $donation->delete();
+        return redirect()->route('restaurant.donations_list')->with('success', 'تم الحذف بنجاح');
     }
 }

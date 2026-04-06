@@ -39,21 +39,29 @@ class User extends Authenticatable
 
 
 
-     // العلاقة: User له Role واحد
     public function role()
     {
         return $this->belongsTo(Role::class);
     }
 
-    // العلاقة: User له عدة Entities من خلال user_entity_mappings
-    public function entities()
-    {
-        return $this->belongsToMany(Entity::class, 'user_entity_mappings');
-    }
+   public function entities()
+{
+    return $this->belongsToMany(
+        Entity::class,
+        'user_entity_mappings',
+        'UserID',
+        'EntityID'
+    );
+}
 
-    // العلاقة: Donations
+
     public function donations()
     {
         return $this->hasMany(Donation::class);
+
     }
+    public function notifications()
+{
+    return $this->hasMany(Notification::class, 'UserID');
+}
 }

@@ -8,63 +8,62 @@ use Illuminate\Support\Facades\Auth;
 
 class LoginController extends Controller
 {
-    /**
-     * عرض صفحة تسجيل الدخول
-     */
     public function showLoginForm()
     {
         return view('auth.login');
     }
 
-    /**
-     * معالجة عملية تسجيل الدخول
-     */
     public function login(Request $request)
     {
-        // 1. التحقق من صحة البيانات المدخلة
-        $credentials = $request->validate([
+        $request->validate([
             'email' => ['required', 'email'],
-            'password' => ['required'],
+            'password' => ['required', 'min:6'],
+        ], [
+            'email.required' => 'حقل البريد الإلكتروني لا يمكن أن يكون فارغاً.',
+            'email.email' => 'البريد الإلكتروني الذي أدخلته غير صحيح.',
+            'password.required' => 'يرجى إدخال كلمة المرور.',
+            'password.min' => 'كلمة المرور يجب أن تكون 6 خانات على الأقل.',
         ]);
 
-        // 2. محاولة تسجيل الدخول
+        $credentials = $request->only('email', 'password');
+
         if (Auth::attempt($credentials)) {
             $user = Auth::user();
 
-            // ⚠️ فحص هل الحساب مفعل من قبل الإدارة؟
+        
             if ($user->IsActive == 0) {
-                Auth::logout(); // تسجيل خروج فوراً
+                Auth::logout();
                 return back()->withErrors([
-                    'email' => 'حسابك لا يزال قيد المراجعة من قبل الإدارة.',
+                    'email' => 'عذراً، حسابك لا يزال قيد المراجعة. سيتم تفعيل حسابك قريباً من قبل الإدارة.',
                 ]);
             }
 
-            // تجديد الجلسة للحماية من هجمات تثبيت الجلسة
             $request->session()->regenerate();
 
-            // 3. التوجيه الصارم حسب الدور (RoleID)
-            // ملاحظة: استخدمنا redirect العادي لتجنب التوجيه التلقائي للصفحة الرئيسية
-            if ($user->RoleID == 1) { // مدير النظام
+            if ($user->RoleID == 1) {
                 return redirect('/admin/dashboard');
-            } elseif ($user->RoleID == 2) { // مطعم
-                return redirect('/restaurant/dashboard');
-            } elseif ($user->RoleID == 3) { // جمعية خيرية
-               return redirect()->route('association.dashboard');
             }
 
-            // إذا لم يتطابق مع أي دور، يذهب للرئيسية
-            return redirect('/');
+            $entity = $user->entities->first();
+
+            if ($entity) {
+                if ($entity->EntityType == 'Restaurant') {
+                    return redirect('/restaurant/dashboard');
+                } elseif (in_array($entity->EntityType, ['Charity', 'NGO'])) {
+                    return redirect()->route('association.dashboard');
+                }
+            }
+
+            return $user->RoleID == 2 ? redirect()->route('association.dashboard') : redirect('/');
         }
 
-        // 4. إذا فشلت بيانات تسجيل الدخول
-        return back()->withErrors([
-            'email' => 'الإيميل أو كلمة المرور غير صحيحة.',
-        ]);
+        return back()
+            ->withInput($request->only('email'))
+            ->withErrors([
+                'email' => 'البيانات المدخلة لا تتطابق مع سجلاتنا.',
+            ]);
     }
 
-    /**
-     * عملية تسجيل الخروج
-     */
     public function logout(Request $request)
     {
         Auth::logout();

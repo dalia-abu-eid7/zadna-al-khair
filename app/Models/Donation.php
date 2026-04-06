@@ -8,30 +8,38 @@ use Illuminate\Database\Eloquent\Model;
 class Donation extends Model
 {
     use HasFactory;
+
     protected $table = 'donations';
-    protected $primaryKey = 'DonationID';
+    protected $primaryKey = 'DonationID'; 
 
-    protected $fillable =
-     ["StatusID",   'Description', 'Quantity', 'Unit', 'ExpiryInfo',
-      'DonatingEntityID'  , 'PickupTimeSuggestion'];
+    protected $fillable = [
+        'StatusID',
+        'Description',
+        'Quantity',
+        'Unit',
+        'DonatingEntityID',
+        'ReceivingEntityID',
+        'ExpiryInfo',
+        'PickupTimeSuggestion'
+    ];
 
-    public function user()
+    public function donatingEntity()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(Entity::class, 'DonatingEntityID', 'EntityID');
     }
 
-    public function entity()
+    public function receivingEntity()
     {
-        return $this->belongsTo(Entity::class);
+        return $this->belongsTo(Entity::class, 'ReceivingEntityID', 'EntityID');
     }
 
     public function status()
     {
-        return $this->belongsTo(DonationStatus::class, 'status_id');
+        return $this->belongsTo(DonationStatus::class, 'StatusID', 'StatusID');
     }
 
     public function history()
     {
-        return $this->hasMany(DonationHistory::class);
+        return $this->hasMany(DonationHistory::class, 'DonationID', 'DonationID');
     }
 }

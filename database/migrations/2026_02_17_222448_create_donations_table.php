@@ -20,7 +20,7 @@ return new class extends Migration
     $table->string('Description');
     $table->string('Quantity')->nullable();
 
-     $table->string('Unit')->nullable(); // أضفنا هذا السطر لحل المشكلة
+     $table->string('Unit')->nullable(); 
          $table->string('PickupTimeSuggestion')->nullable();
 
     $table->string('ExpiryInfo')->nullable();

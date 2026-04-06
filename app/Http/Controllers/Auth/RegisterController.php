@@ -12,22 +12,30 @@ use Illuminate\Support\Facades\DB;
 class RegisterController extends Controller
 {
 
-public function registerRestaurant(Request $request)
+  public function registerRestaurant(Request $request)
 {
     try {
-        DB::transaction(function () use ($request) {
+        // جلب رتبة المطعم من قاعدة البيانات بناءً على الاسم
+        $restaurantRole = DB::table('roles')->where('RoleName', 'Restaurant')->first();
+
+        // تأكدي من وجود الرتبة لتجنب الأخطاء
+        if (!$restaurantRole) {
+            return "الغلط هو: لم يتم العثور على رتبة Restaurant في جدول roles.";
+        }
+
+        DB::transaction(function () use ($request, $restaurantRole) {
 
             // إنشاء المستخدم
             $user = User::create([
-                'name'     => $request->name,
-                'email'    => $request->email,
-                'password' => Hash::make($request->password),
+                'name'        => $request->name,
+                'email'       => $request->email,
+                'password'    => Hash::make($request->password),
                 'PhoneNumber' => $request->PhoneNumber,
-                'RoleID'   => 2,
-                'IsActive' => 0,
+                'RoleID'      => $restaurantRole->RoleID, // استخدام القيمة التي جلبناها
+                'IsActive'    => 0,
             ]);
 
-            // إنشاء الكيان
+            // إنشاء الكيان (المطعم)
             $entity = Entity::create([
                 'EntityName'    => $request->EntityName,
                 'EntityType'    => 'Restaurant',
@@ -38,32 +46,29 @@ public function registerRestaurant(Request $request)
                 'Status'        => 'Pending',
             ]);
 
-            // الربط
-          DB::table('user_entity_mappings')->insert([
-    'UserID'   => $user->id, // أو $user->UserID حسب موديل اليوزر
-    'EntityID' => $entity->EntityID, // سحبنا الرقم اللي لسه متخزن هالحين
-    'created_at' => now(),
-]);
+            // الربط في جدول المابينج
+            DB::table('user_entity_mappings')->insert([
+                'UserID'     => $user->id,
+                'EntityID'   => $entity->EntityID,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
         });
 
-return redirect('/login')->with('success', 'تهانينا تم انشاء حسابك بنجاح، يرجى تسجيل الدخول للذهاب للوحة التحكم الخاصة بك');
+        return redirect('/login')->with('success', 'تهانينا تم انشاء حسابك بنجاح!');
     } catch (\Exception $e) {
-        // إذا فشل، رح يطبع لك شو السبب بالضبط
         return "الغلط هو: " . $e->getMessage();
     }
 }
-    // دالة عرض صفحة التسجيل (المرحلة الأولى)
     public function showRegistrationForm()
     {
         return view('auth.restaurant-register');
     }
 
-    // دالة عرض صفحة التسجيل (المرحلة الثانية)
-public function showRegistrationStep2(Request $request)
-{
-    // هنا نمرر البيانات القادمة من الصفحة الأولى لكي نعرضها في الصفحة الثانية
-    return view('auth.restaurant-register-step2', [
-        'old_data' => $request->all()
-    ]);
-}
+    public function showRegistrationStep2(Request $request)
+    {
+        return view('auth.restaurant-register-step2', [
+            'old_data' => $request->all()
+        ]);
+    }
 }

@@ -10,13 +10,13 @@ class DatabaseSeeder extends Seeder
     /**
      * Seed the application's database.
      */
-   public function run(): void
-    {
-         $this->call([
-            RolesTableSeeder::class,
-            UsersTableSeeder::class,        // يجب أن يكون قبل Entities
-            DonationStatusSeeder::class,
-            EntitiesTableSeeder::class,
-        ]);
-    }
+  public function run(): void
+{
+    $this->call([
+        RolesTableSeeder::class,
+        UsersTableSeeder::class,
+        DonationStatusSeeder::class,
+        EntitiesTableSeeder::class, 
+    ]);
+}
 }

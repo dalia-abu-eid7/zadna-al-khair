@@ -3,99 +3,115 @@
 namespace App\Http\Controllers\Association;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use App\Models\Donation;
+use App\Models\UserEntityMapping;
+use App\Models\User;
+use App\Models\Entity;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class AssociationDashboardController extends Controller
 {
-    // 1. لوحة التحكم الرئيسية
-    public function index()
-    {
-        $associationId = Auth::user()->EntityID;
+    private function getEntityMapping() {
+        return UserEntityMapping::where('UserID', Auth::id())->first();
+    }
 
-        $coordinatingDonations = DB::table('donations')
-            ->join('entities as restaurant', 'donations.DonatingEntityID', '=', 'restaurant.EntityID')
-            ->where('donations.StatusID', 2) // مقبول وقيد التنسيق
-            ->where('donations.ReceivingEntityID', $associationId)
-            ->select(
-                'donations.*',
-                'restaurant.EntityName as RestaurantName',
-                DB::raw("(SELECT PhoneNumber FROM users WHERE EntityID = donations.DonatingEntityID LIMIT 1) as RestaurantPhone")
-            )
-            ->get();
+    public function index() {
+        $mapping = $this->getEntityMapping();
+        if (!$mapping) return redirect()->route('login');
+
+        $coordinatingDonations = Donation::with(['donatingEntity'])
+            ->where('ReceivingEntityID', $mapping->EntityID)
+            ->where('StatusID', 2)
+            ->get()
+            ->map(function ($donation) {
+                $owner = User::whereHas('entities', fn($q) => $q->where('entities.EntityID', $donation->DonatingEntityID))->first();
+                $donation->RestaurantPhone = $owner->PhoneNumber ?? 'غير متوفر';
+                return $donation;
+            });
 
         $stats = [
-            'partner_restaurants' => DB::table('donations')->where('ReceivingEntityID', $associationId)->distinct('DonatingEntityID')->count(),
+            'partner_restaurants' => Donation::where('ReceivingEntityID', $mapping->EntityID)->distinct('DonatingEntityID')->count('DonatingEntityID'),
             'coordinating'        => $coordinatingDonations->count(),
-            'distributed'         => DB::table('donations')->where('ReceivingEntityID', $associationId)->where('StatusID', 3)->sum('Quantity') ?? 0,
-            'accepted_total'      => DB::table('donations')->where('ReceivingEntityID', $associationId)->count(),
+            'distributed'         => Donation::where('ReceivingEntityID', $mapping->EntityID)->where('StatusID', 3)->sum('Quantity') ?? 0,
+            'accepted_total'      => Donation::where('ReceivingEntityID', $mapping->EntityID)->count(),
         ];
 
         return view('association.dashboard', compact('stats', 'coordinatingDonations'));
     }
 
-    // 2. التبرعات المتاحة (المعروضة من المطاعم)
-    public function availableDonations()
-    {
-        $donations = DB::table('donations')
-            ->leftJoin('entities as restaurant', 'donations.DonatingEntityID', '=', 'restaurant.EntityID')
-            ->where('donations.StatusID', 1) // حالة متاح
-            ->whereNull('donations.ReceivingEntityID')
-            ->select(
-                'donations.*',
-                DB::raw("IFNULL(restaurant.EntityName, 'مطعم غير معروف') as RestaurantName")
-            )
-            ->latest()
+    public function availableDonations() {
+        $donations = Donation::with('donatingEntity')
+            ->where('StatusID', 1)
+            ->whereNull('ReceivingEntityID')
             ->get();
-
         return view('association.available_donations', compact('donations'));
     }
 
-    // 3. معالجة زر "قبول التبرع" (هذه الدالة التي كانت تنقصك وتسبب الخطأ)
-    public function acceptDonation($id)
-    {
-        $associationId = Auth::user()->EntityID;
 
-        DB::table('donations')
-            ->where('DonationID', $id)
-            ->where('StatusID', 1)
-            ->update([
-                'StatusID' => 2, // تحويله لمقبول
-                'ReceivingEntityID' => $associationId,
-                'updated_at' => now()
-            ]);
+public function acceptDonation($id) {
+    $mapping = $this->getEntityMapping();
+    $donation = Donation::findOrFail($id);
 
-        return redirect()->route('association.dashboard')->with('success', 'تم قبول التبرع بنجاح، يظهر الآن في لوحة التحكم.');
-    }
+    $donation->update([
+        'StatusID' => 2,
+        'ReceivingEntityID' => $mapping->EntityID
+    ]);
 
-    // 4. سجل التبرعات المقبولة
-    public function acceptedDonations()
-    {
-        $associationId = Auth::user()->EntityID;
 
-        $acceptedDonations = DB::table('donations')
-            ->join('entities as restaurant', 'donations.DonatingEntityID', '=', 'restaurant.EntityID')
-            ->where('donations.StatusID', 2)
-            ->where('donations.ReceivingEntityID', $associationId)
-            ->select(
-                'donations.*',
-                'restaurant.EntityName as RestaurantName',
-                DB::raw("(SELECT PhoneNumber FROM users WHERE EntityID = donations.DonatingEntityID LIMIT 1) as RestaurantPhone")
-            )
-            ->get();
+    DB::table('donation_history')->insert([
+        'DonationID'      => $id,
+        'StatusID'        => 2,
+        'ChangedByUserID' => Auth::id(),
+        'ChangeTimestamp' => now(),
+    ]);
+
+    return redirect()->route('association.accepted_donations')->with('success', 'تم قبول التبرع!');
+}
+
+
+
+    public function acceptedDonations() {
+        $mapping = $this->getEntityMapping();
+        $acceptedDonations = Donation::with('donatingEntity')
+            ->where('ReceivingEntityID', $mapping->EntityID)
+            ->whereIn('StatusID', [2, 3])
+            ->get()
+            ->map(function ($donation) {
+                $owner = User::whereHas('entities', fn($q) => $q->where('entities.EntityID', $donation->DonatingEntityID))->first();
+                $donation->RestaurantName = $donation->donatingEntity->EntityName ?? 'غير معروف';
+                $donation->RestaurantPhone = $owner->PhoneNumber ?? 'غير متوفر';
+                return $donation;
+            });
 
         return view('association.accepted_donations', compact('acceptedDonations'));
     }
 
-    // 5. تأكيد الاستلام النهائي
-    public function confirmReceipt($id)
-    {
-        DB::table('donations')
-            ->where('DonationID', $id)
-            ->where('ReceivingEntityID', Auth::user()->EntityID)
-            ->update(['StatusID' => 3]); // تحويل الحالة لمكتمل
+  
+public function confirm_receipt($id) {
+    Donation::findOrFail($id)->update(['StatusID' => 3]);
 
-        return redirect()->back()->with('success', 'تم تأكيد الاستلام بنجاح!');
+
+    DB::table('donation_history')->insert([
+        'DonationID'      => $id,
+        'StatusID'        => 3,
+        'ChangedByUserID' => Auth::id(),
+        'ChangeTimestamp' => now(),
+    ]);
+
+    return back()->with('success', 'تم تأكيد الاستلام!');
+}
+
+    public function partnerRestaurants() {
+        $mapping = $this->getEntityMapping();
+        $partnerIds = Donation::where('ReceivingEntityID', $mapping->EntityID)->distinct()->pluck('DonatingEntityID');
+
+        $restaurants = Entity::whereIn('EntityID', $partnerIds)->get()->map(function($res) {
+            $user = User::whereHas('entities', fn($q) => $q->where('entities.EntityID', $res->EntityID))->first();
+            $res->phone = $user->PhoneNumber ?? 'غير متوفر';
+            return $res;
+        });
+
+        return view('association.partner_restaurants', compact('restaurants'));
     }
 }
